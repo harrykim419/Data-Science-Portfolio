@@ -1,0 +1,90 @@
+---
+title: "Data Fest"
+output: html_document
+date: '2022-04-30'
+---
+
+```{r}
+# Install Packages
+install.packages("tidyverse")
+library("dplyr")
+library("ggplot2")
+```
+
+```{r}
+# Import Data
+data <- read.csv("logs.csv")
+```
+
+```{r}
+# Subset used data
+data_reduced <- subset(data, select = c("player_id",
+                                        "session",
+                                        "event_time_dbl",
+                                        "missed_safe_invitations",
+                                        "accepted_unsafe_invitations",
+                                        "avatar_age",
+                                        "avatar_gender"))
+```
+
+```{r}
+# Turning Session Count into Numeric Data
+
+data_reduced$session <- as.numeric(sub("Session ", "", data_reduced$session))
+```
+
+```{r}
+# Total Sessions
+data_session <- data_reduced %>% group_by(player_id) %>% summarise(total_session = max(session, na.rm = TRUE, nan.rm = TRUE))
+```
+
+```{r}
+# Total Seconds
+data_time <- data_reduced %>% group_by(player_id) %>% summarise(total_time = max(event_time_dbl, na.rm = TRUE, nan.rm = TRUE))
+```
+
+```{r}
+# Missed safe invitation
+data_missed_safe <- data_reduced %>% group_by(player_id) %>% summarise(missed_safe = sum(missed_safe_invitations, na.rm = TRUE, nan.rm = TRUE))
+
+# Accepted unsafe invitation
+data_accepted_unsafe <- data_reduced %>% group_by(player_id) %>% summarise(accepted_unsafe = sum(accepted_unsafe_invitations, na.rm = TRUE, nan.rm = TRUE))
+
+# Combine into bad choices
+data_bad_choice <- data.frame("player_id" = data_session$player_id,"bad_choice" = (data_missed_safe$missed_safe + data_accepted_unsafe$accepted_unsafe))
+```
+
+```{r}
+# Avatar age
+age_filter <- data_reduced %>% filter(avatar_age > 0)
+data_avatar_age <- age_filter %>% group_by(player_id) %>% summarise(age = mean(avatar_age))
+
+
+# Avatar Gender
+avatar_filter <- data_reduced %>% filter(avatar_age > 0 & !is.na(avatar_gender))
+duplicates <- duplicated(avatar_filter$player_id)
+
+avatar_gender_temp <- avatar_filter %>% group_by(player_id) %>% summarise(gender = avatar_gender)
+gender_repeat <- avatar_gender_temp$gender[!duplicates]
+
+data_avatar_gender <- data.frame("player_id" = data_avatar_age$player_id, "gender" = gender_repeat)
+
+temp <- if_else(data_avatar_gender$gender == "Male",1,0)
+data_avatar_gender$is.male <- temp
+```
+
+```{r}
+# Combined DataFrame
+data_selected <- data.frame("player_id" = data_session$player_id, 
+                            "bad_choices" = data_bad_choice$bad_choice, 
+                            "total_session" = data_session$total_session, 
+                            "total_time" = data_time$total_time, 
+                            "age" = data_avatar_age$age, 
+                            "gender" = data_avatar_gender$gender,
+                            "is.male" = data_avatar_gender$is.male
+)
+```
+
+```{r}
+# write.csv(data_selected, "data.csv")
+```

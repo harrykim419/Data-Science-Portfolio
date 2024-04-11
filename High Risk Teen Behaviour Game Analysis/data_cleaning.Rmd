@@ -1,0 +1,37 @@
+---
+title: "Data Fest"
+output: html_document
+date: '2022-04-30'
+---
+
+```{r}
+# Install Necessary Packages
+install.packages("tidyverse")
+library("dplyr")
+```
+
+```{r}
+# Load Data
+data <- read.csv("logs_short.csv")
+player <- read.csv("player.csv")
+```
+
+```{r}
+# 
+player_stack_time <- player %>% group_by(stack_title)%>%summarize(playtime=max(event_time_dbl))%>%arrange(desc(playtime))
+overall_stack_time <- data %>% group_by(stack_title)%>%summarize(playtime=max(event_time_dbl))%>%arrange(desc(playtime))
+session_count <- data %>% group_by(player_id)%>%summarize(session_count = count(session))
+```
+
+```{r}
+#General Data Cleaning
+data_reduced <- subset(data, select = c("player_id", "session", "event_id","event_time", "event_time_dbl","stack_id","missed_safe_invitations","accepted_unsafe_invitations"))
+
+data_reduced$session <- sub("Session ", "", data_reduced$session)
+data_reduced$session <- as.numeric(data_reduced$session)
+
+#Session Frequencies
+data_session <- data_reduced %>% group_by(player_id) %>% summarize(avg_session = mean(session, na.rm = TRUE, nan.rm = TRUE))
+missed_safe <- data_reduced %>% group_by(player_id) %>% summarize(safe_missed = sum(missed_safe_invitations, na.rm = TRUE, nan.rm = TRUE))
+accepted_unsafe <- data_reduced %>% group_by(player_id) %>% summarize(unsafe_accepted = sum(accepted_unsafe_invitations, na.rm = TRUE, nan.rm = TRUE))
+```

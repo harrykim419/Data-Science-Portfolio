@@ -1,0 +1,466 @@
+---
+title: "Stats 101C Project"
+output: pdf_document
+---
+
+## Set Seed for Consistency
+
+```{r}
+set.seed(5) #For 5th Place
+```
+
+## Data Work
+
+### Install Necessary Packages
+
+```{r}
+# install.packages("glmnet")
+# install.packages("pls")
+# install.packages("ISLR")
+# install.packages("gam")
+# install.packages("gridExtra")
+# install.packages("ggplot")
+# install.packages("tree")
+# install.packages("tidyverse")
+# install.packages("VIM")
+# install.packages("mice")
+# install.packages("Hmisc")
+# install.packages("neuralnet")
+# install.packages("DMwR")
+# install.packages("sylcount")
+library(neuralnet)
+library(stringr)
+library(lubridate)
+library(Hmisc)
+library(dplyr)
+library(tree)
+library(pls)
+library(glmnet)
+library(splines)
+library(ISLR)
+library(gam)
+library(gridExtra)
+library(ggplot2)
+library(VIM)
+library(mice)
+library(randomForest)
+library(MASS)
+library(class)
+library(boot)
+library(crossval)
+library(olsrr)
+library(StepReg)
+library(sylcount)
+library(leaps)
+```
+
+### Load Data
+
+```{r}
+train <- read.csv("Acctrain.csv")
+test <- read.csv("AcctestNoYNew.csv")
+```
+
+### Find NA's
+
+```{r}
+sum(is.na(train))
+sum(is.na(test))
+```
+
+### Plot NA's
+
+```{r}
+# Training NA's
+
+na.train.plot <- aggr(train, col=c('navyblue','yellow'),
+                      numbers = TRUE, sortVars = TRUE, lables = names(train),
+                      cex.axis = 0.7, gap = 3, ylab = c("Missing Data","Pattern"))
+# In this case we might want to delete Wind_Chill.F. and maybe Wind_Speed.mph.
+sum(is.na(train$Wind_Chill.F.))
+sum(is.na(train$Wind_Speed.mph.))
+```
+
+```{r}
+# Testing NA's
+
+na.test.plot <- aggr(test, col=c('navyblue','yellow'),
+                     numbers = TRUE, sortVars = TRUE, lables = names(test),
+                     cex.axis = 0.7, gap = 3, ylab = c("Missing Data","Pattern"))
+sum(is.na(test$Wind_Chill.F.))
+sum(is.na(test$Wind_Speed.mph.))
+```
+
+## Finding Significance in the given data and merging new data
+
+### Text mining (for Description)
+
+```{r}
+# Create two data sets of the description for SEVERE and MILD accidents
+
+# Severe
+severe <- which(train$Severity == "SEVERE")
+acc.severe <- test[severe,]
+
+# Mild
+mild <- which(train$Severity == "MILD")
+acc.mild <- test[mild,]
+
+# create a dataframe with our results
+output <- data_frame('Description' = acc.severe$Description)
+output2 <- data_frame('Description' = acc.mild$Description)
+
+# Export the file to be used in text mining
+
+# @ https://voyant-tools.org/
+
+
+write.csv(output, 'Description Text.csv', row.names=FALSE)
+write.csv(output2, 'Description Text Mild.csv', row.names=FALSE)
+
+# weather condition
+
+severe.weather <- data_frame('Weather Condition' = acc.severe$Weather_Condition)
+mild.weather <- data_frame('Weather Condition' = acc.mild$Weather_Condition)
+
+write.csv(severe.weather, 'Weather Condition Severe.csv', row.names=FALSE)
+write.csv(mild.weather, 'Weather Condition Mild.csv', row.names=FALSE)
+```
+
+### Change variables
+
+```{r}
+# Create a function so it can be applied to any dataset from accident
+
+changedata <- function(data){
+  
+  # Convert the Zipcode to numeric 5-digits
+  data$Zipcode <- substr(data$Zipcode, 1, 5)
+  data$Zipcode <- as.numeric(data$Zipcode)
+  
+  # Load the sensus data
+  pop_popdensity <- read.csv("georef-united-states-of-america-zc-point.csv", sep = ";")
+  pop_popdensity <- pop_popdensity[c(1,7,8)]
+  names(pop_popdensity)[1] <- "Zipcode"
+  
+  # Merge the sensus data by zipcode
+  if (nrow(data) < 30000){
+    newdata <- left_join(data, pop_popdensity, by="Zipcode", all.x=TRUE)
+  } else if (nrow(data) > 30000){
+    newdata <- merge(x = data,y = pop_popdensity, by="Zipcode", all.x=TRUE)
+  }
+  
+  # Convert time data to something that is usable
+  newdata$Start_Time <- as_datetime(newdata$Start_Time)
+  newdata$End_Time <- as_datetime(newdata$End_Time)
+  
+  # Holiday
+  newdata <- mutate(newdata, holiday = month(Start_Time) == 12 | month(Start_Time) == 11)
+  # Covid
+  newdata <- mutate(newdata, covid_year = year(Start_Time) == 2020 | year(Start_Time) == 2021)
+  
+  # Accident Duration
+  newdata <- mutate(newdata, duration = difftime(End_Time, Start_Time, units = "mins"))
+  newdata$duration <- as.numeric(newdata$duration)
+
+  # Description data (from text mining results)
+  
+  # numerical range 0-2 for uses_accident and road_closed (should only be 0 or 1), so I changed str_count to str_detect, also just keep it consistent with the rest of the codes. 
+  
+  # "Accident" mentioned in description
+  newdata <- mutate(newdata, uses_accident = str_detect(newdata$Description, regex("accident", ignore_case = TRUE)))
+  # "incident" mentioned in description
+  newdata <- mutate(newdata, uses_incident = str_detect(newdata$Description, regex("incident", ignore_case = TRUE)))
+  # "exit" mentioned in description
+  newdata <- mutate(newdata, uses_exit = str_detect(newdata$Description, regex("exit", ignore_case = TRUE)))
+  # "blocked" mentioned in description
+  newdata <- mutate(newdata, uses_blocked = str_detect(newdata$Description, regex("blocked", ignore_case = TRUE)))
+  # "delays" mentioned in description
+  newdata <- mutate(newdata, uses_incident = str_detect(newdata$Description, regex("delays", ignore_case = TRUE)))
+  # "with" mentioned in description
+  newdata <- mutate(newdata, uses_with = str_detect(newdata$Description, regex("with", ignore_case = TRUE)))
+  # "with caution" mentioned in description
+  newdata <- mutate(newdata, uses_with_caution = str_detect(newdata$Description, regex("with caution", ignore_case = TRUE)))
+  # "caution" mentioned in description
+  newdata <- mutate(newdata, uses_caution = str_detect(newdata$Description, regex("caution", ignore_case = TRUE)))
+  # "road" mentioned in description
+  newdata <- mutate(newdata, uses_road = str_detect(newdata$Description, regex("road", ignore_case = TRUE)))
+  # "closed" mentioned in description
+  newdata <- mutate(newdata, uses_closed = str_detect(newdata$Description, regex("closed", ignore_case = TRUE)))
+  # "road closed" mentioned in description
+  newdata <- mutate(newdata, uses_road_closed = str_detect(newdata$Description, regex("road closed", ignore_case = TRUE)))
+  # "stationary traffic" mentioned in description
+  newdata <- mutate(newdata, uses_stationary_traffic = str_detect(newdata$Description, regex("stationary traffic", ignore_case = TRUE)))
+  # "stationary" mentioned in description
+  newdata <- mutate(newdata, uses_stationary = str_detect(newdata$Description, regex("stationary", ignore_case = TRUE)))
+  # "slow traffic" mentioned in description
+  newdata <- mutate(newdata, uses_slow_traffic = str_detect(newdata$Description, regex("slow traffic", ignore_case = TRUE)))
+  # "slow" mentioned in description
+  newdata <- mutate(newdata, uses_slow = str_detect(newdata$Description, regex("slow", ignore_case = TRUE)))
+  
+  # Readability: Flesch-Kincaid Grade Level
+  # From the sylcount package
+  newdata <- cbind(newdata, readability(newdata$Description))
+  
+  # Weather Condition
+  # Some weather conditions are not mentioned due to it not being present in testing data
+  
+  # Clear
+  newdata <- mutate(newdata, weather_good = str_detect(newdata$Weather_Condition, regex(c("Clear","Fair"), ignore_case = TRUE)))
+  
+  # Weather Intensity
+  newdata <- mutate(newdata, weather_heavy = str_detect(newdata$Weather_Condition, regex("Heavy", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_light = str_detect(newdata$Weather_Condition, regex("Light", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_freezing = str_detect(newdata$Weather_Condition, regex("Freezing", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_shower = str_detect(newdata$Weather_Condition, regex("Shower", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_blowing = str_detect(newdata$Weather_Condition, regex("Blowing", ignore_case = TRUE)))
+  
+  # Dust/Fog/Wind
+  newdata <- mutate(newdata, weather_dust = str_detect(newdata$Weather_Condition, regex("Dust", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_thunder = str_detect(newdata$Weather_Condition, regex("Thunder", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_fog = str_detect(newdata$Weather_Condition, regex("Fog", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_Haze = str_detect(newdata$Weather_Condition, regex("Haze", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_smoke = str_detect(newdata$Weather_Condition, regex("Smoke", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_windy = str_detect(newdata$Weather_Condition, regex("Windy", ignore_case = TRUE)))
+  
+  # Rain
+  newdata <- mutate(newdata, weather_drizzle = str_detect(newdata$Weather_Condition, regex("Drizzle", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_rain = str_detect(newdata$Weather_Condition, regex("Rain", ignore_case = TRUE)))
+  newdata <- mutate(newdata, weather_thunderstorm = str_detect(newdata$Weather_Condition, regex(c("Thunderstorm", "T_Storm"), ignore_case = TRUE)))
+  
+  # Snow
+  newdata <- mutate(newdata, weather_snow = str_detect(newdata$Weather_Condition, regex("Snow", ignore_case = TRUE)))
+  
+  return(newdata)
+}
+```
+
+### Converting Character to Factors
+
+```{r}
+# Function that converts string data into factors
+
+turnfactor <- function(data){
+  newdata <- as.data.frame(unclass(data),stringsAsFactors=TRUE)
+  return(newdata)
+}
+```
+
+### Removing Repetitive Variables
+
+```{r}
+# Function that removes predictors that are deemed unnecessary
+
+remove.var <- function(data){
+  newdata <- subset(data, select = -c(Start_Time, End_Time, 
+                                      Description,
+                                      Street, Zipcode,
+                                      City, County,
+                                      State, Country,
+                                      re, gl,
+                                      Airport_Code, 
+                                      Weather_Timestamp,Weather_Condition, Wind_Direction))
+}
+```
+
+### Impute
+
+```{r}
+# Function that converts testing and training...
+#   - To not have any NA, NaN, Inf, -Inf values
+#   - Impute any missing values
+#   - To add and merge new/significance in given data
+
+imp <- function(data){
+  # Change data
+  new <- changedata(data)
+  # Remove Column with most NA's
+  new <- subset(new, select = -c(Wind_Chill.F., Wind_Speed.mph.))
+  # Turn any character values into factors
+  new <- turnfactor(new)
+  # Remove unncessary Variables
+  new <- remove.var(new)
+  
+  if (nrow(data) < 30000){
+    # Testing has Observations column
+    new <- new[,-1]
+  }
+  
+  # The smog predictor (from sylcount) had NA, NaN, Inf, -Inf
+  # Replace the values with manually computed mean
+  for (i in 1:length(new$smog)){
+    if (is.infinite(new$smog[i]) || is.nan(new$smog[i])) {
+      new$smog[i] <- 9.45
+    }
+  }
+  
+  # Impute the NA values using mice function
+  newdata <- mice(new, m = 1, maxit = 1, method = "pmm")
+  ret <- complete(newdata , 1)
+  return(ret)
+}
+```
+
+## Model Fitting
+
+### Change Data
+
+```{r}
+test1 <- imp(test)
+train1 <- imp(train)
+
+# Check for NA's
+sum(is.na(test1))
+sum(is.na(train1))
+```
+
+### Logistic Model (GLM)
+
+```{r}
+# Fitting Logistic Regression model for training data
+LR <- glm(Severity ~., data = train1, family = "binomial")
+
+# Making predictions
+LR_pred <- predict (LR, type = "response", data = "binomial")
+
+# Creating confusion matrix
+predicted.Severity <- rep("MILD", length(LR_pred))
+predicted.Severity[LR_pred > 0.5] <- "SEVERE"
+table(predicted.Severity, train1$Severity)
+
+# Training Accuracy Rate
+mean(predicted.Severity == train1$Severity)
+```
+
+### PCA Model
+
+```{r}
+# Fitting a PCA model
+pca <- prcomp(train1[, c(2:6, 9:12, 30:31, 34, 49:51, 53:58)], center = TRUE, scale. = TRUE)
+summary(pca)
+screeplot(pca, type = "l") # based on summary and the screeplot, 9 principal components explain about 86.8% of the training data
+```
+
+```{r}
+# Prediction with Principal Components
+pca.pred.train <- predict(pca, train1)
+pca.pred.train <- data.frame(pca.pred.train, train1$Severity)
+
+# Multinomial Logistic Regression with first 9 PCs
+library(nnet)
+pca.pred.train$train1.Severity <- relevel(pca.pred.train$train1.Severity, ref = "MILD")
+mymodel <- multinom(train1.Severity ~ PC1 + PC2 + PC3 + PC4 + PC5 + PC6 + PC7 + PC8 + PC9, data = pca.pred.train)
+
+# Confusion Matrix and Training Accuracy
+pred <- predict(mymodel, pca.pred.train)
+table(pred, pca.pred.train$train1.Severity)
+mean(pred == pca.pred.train$train1.Severity)
+```
+
+### Fitting Tree
+
+```{r}
+# Fitting a tree
+fit.tree <- tree(Severity ~., data = train1)
+summary(fit.tree)
+```
+
+```{r}
+# Cross Validation for Pruning
+cv <- cv.tree(fit.tree, FUN = prune.misclass)
+par(mfrow = c(1, 2))
+plot(cv$size, cv$dev, type = "b")
+plot(cv$k, cv$dev, type = "b")
+```
+
+```{r}
+# Pruned tree model
+prune.tree <- prune.misclass(fit.tree, best = 3)
+plot(prune.tree)
+text(prune.tree, pretty = 0)
+```
+
+```{r}
+# Making predictions for pruned tree
+prune.tree.pred <- predict(prune.tree, train1, type = "class")
+
+# Training Accuracy Rate
+mean(prune.tree.pred == train1$Severity)
+```
+
+### Random Forest Model
+
+```{r}
+rf <- randomForest(Severity ~., data = train1, importance = TRUE)
+importance(rf)
+varImpPlot(rf)
+```
+
+```{r}
+# Subset Predictors with negative MeanDecreaseAccuracy
+train.sub <- subset(train1, select = -c(Amenity,No_Exit, weather_freezing, weather_shower, weather_dust, weather_windy,weather_thunderstorm))
+```
+
+```{r}
+rf1 <- randomForest(Severity ~., data = train.sub, importance = TRUE)
+importance(rf1)
+varImpPlot(rf1)
+```
+
+```{r}
+train.sub2 <- subset(train.sub, select = -c(Give_Way,Traffic_Calming,weather_drizzle, weather_rain))
+```
+
+```{r}
+rf2 <- randomForest(Severity ~., data = train.sub2, importance = TRUE)
+importance(rf2)
+varImpPlot(rf2)
+```
+
+```{r}
+train.sub3 <- subset(train.sub2, select = -c(Railway, Bump, Roundabout, Turning_Loop,words))
+```
+
+```{r}
+rf3 <- randomForest(Severity ~., data = train.sub3, importance = TRUE)
+importance(rf3)
+varImpPlot(rf3)
+```
+
+```{r}
+# Visualization for Random Forest
+barchart(varImpPlot(rf3, type = 1))
+importance <- as.data.frame(importance(rf3))
+importance <- cbind(vars = rownames(importance), importance)
+importance <- importance[order(importance$MeanDecreaseAccuracy, decreasing = TRUE), ]
+importance$vars <- factor(importance$vars, levels = unique(importance$vars))
+importance <- importance[c(1:10), ]
+ggplot(importance,
+       aes(x = MeanDecreaseAccuracy,
+           y = reorder(vars, MeanDecreaseAccuracy))) +
+  ylab("Features") +
+  ggtitle("Variable Importance") +
+  geom_col(aes(fill = MeanDecreaseAccuracy)) +
+  scale_fill_gradient2(high = "darkred",
+                       low = "orange",
+                       midpoint = median(importance$MeanDecreaseAccuracy))
+```
+
+```{r}
+pred.train.rf <- predict(rf3, train1)
+# Training Accuracy Rate
+mean(pred.train.rf == train1$Severity)
+```
+
+
+```{r}
+# Predict Testing
+pred <- predict(rf3, test1)
+
+# Submission Upload
+submission <- data_frame('Ob' = c(1:15000), 'Severity' = pred)
+write.csv(submission, 'submission1.csv', row.names = FALSE)
+```
+
+
+
